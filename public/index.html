@@ -56,8 +56,9 @@
         <p id="access-message" class="message" role="status"></p>
       </section>
 
-      <section id="imports-panel" class="panel" aria-labelledby="imports-title" hidden>
+      <section id="imports-panel" class="panel" aria-labelledby="imports-title">
         <h2 id="imports-title">Import records</h2>
+        <p id="imports-lock-message" class="muted">Enter the owner token above and click Open imports to enable file uploads.</p>
         <p>Import staff master before leave and availability. Upload CRM orders last. The same file can be uploaded again safely without duplicating its rows.</p>
         <div class="import-grid">
           <article class="import-card" data-kind="inventory"><h3>Stock count</h3><p>Upload the current inventory JSON. The checked time is shown in history.</p><input type="file" accept=".json,application/json"><button>Import stock</button><p class="message" role="status"></p></article>
@@ -95,12 +96,22 @@
       const tokenInput = document.querySelector("#token");
       const accessMessage = document.querySelector("#access-message");
       const importsPanel = document.querySelector("#imports-panel");
+      const importsLockMessage = document.querySelector("#imports-lock-message");
       const historyPanel = document.querySelector("#history-panel");
       const historyList = document.querySelector("#history");
       const planPanel = document.querySelector("#plan-panel");
       const planContent = document.querySelector("#plan-content");
       let ownerToken = sessionStorage.getItem("kitchenPlannerOwnerToken") || "";
+      let ownerReady = false;
       tokenInput.value = ownerToken;
+
+      function setOwnerReady(ready) {
+        ownerReady = ready;
+        importsLockMessage.hidden = ready;
+        document.querySelectorAll(".import-card input, .import-card button").forEach((control) => { control.disabled = !ready; });
+        if (!ready) { historyPanel.hidden = true; planPanel.hidden = true; }
+      }
+      setOwnerReady(false);
 
       function setMessage(target, message, ok = false) {
         target.textContent = message;
@@ -170,24 +181,27 @@
       }
       async function unlock() {
         ownerToken = tokenInput.value.trim();
-        if (!ownerToken) { setMessage(accessMessage, "Enter the owner import token."); return; }
+        if (!ownerToken) { setOwnerReady(false); setMessage(accessMessage, "Enter the owner import token above to enable uploads."); return; }
         sessionStorage.setItem("kitchenPlannerOwnerToken", ownerToken);
         try {
           const data = await api("/api/imports");
-          importsPanel.hidden = false;
+          setOwnerReady(true);
           historyPanel.hidden = false;
           showHistory(data.imports);
           await loadPlan();
           setMessage(accessMessage, "Owner access is ready.", true);
         } catch (error) {
           sessionStorage.removeItem("kitchenPlannerOwnerToken");
-          setMessage(accessMessage, error.message);
+          ownerToken = "";
+          setOwnerReady(false);
+          setMessage(accessMessage, error.message.includes("Owner access required") ? "That token was not accepted by the deployed app. Enter the current Vercel Production OWNER_IMPORT_TOKEN." : error.message);
         }
       }
       document.querySelector("#unlock").addEventListener("click", unlock);
       if (ownerToken) unlock();
       document.querySelectorAll(".import-card").forEach((card) => {
         card.querySelector("button").addEventListener("click", async () => {
+          if (!ownerReady) { setMessage(accessMessage, "Open owner access before uploading files."); return; }
           const file = card.querySelector("input").files[0];
           const message = card.querySelector(".message");
           const button = card.querySelector("button");
