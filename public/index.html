@@ -32,6 +32,13 @@
       .import-list { display: grid; gap: 8px; padding: 0; list-style: none; }
       .import-list li { padding: 12px; border-radius: 9px; background: #f3f5ef; color: #45554b; font-size: 13px; line-height: 1.5; }
       .muted { color: #78837a; font-size: 13px; }
+      .summary-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(160px,1fr)); gap: 10px; margin: 16px 0; }
+      .summary-grid div { padding: 14px; border-radius: 10px; background: #f3f5ef; }
+      .summary-grid strong { display: block; font-size: 22px; }
+      .scroll { overflow-x: auto; }
+      table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      th, td { text-align: left; padding: 9px; border-bottom: 1px solid #e0e4dd; vertical-align: top; }
+      h3 { margin: 20px 0 8px; font-size: 15px; }
       [hidden] { display: none !important; }
       @media (max-width: 560px) { main { padding-top: 34px; } .panel { padding: 17px; } }
     </style>
@@ -66,6 +73,23 @@
         <p class="muted">Details are read from Postgres, so they remain after a reload.</p>
         <ul id="history" class="import-list"></ul>
       </section>
+
+      <section id="plan-panel" class="panel" aria-labelledby="plan-title" hidden>
+        <h2 id="plan-title">Next-week kitchen plan</h2>
+        <p id="plan-source" class="muted"></p>
+        <p id="plan-message" class="message" role="status"></p>
+        <div id="plan-content" hidden>
+          <div id="plan-summary" class="summary-grid"></div>
+          <h3>Daily production and labour</h3><div class="scroll"><table><thead><tr><th>Date</th><th>Cheese</th><th>Egg</th><th>Chicken</th><th>Total</th><th>Labour hours</th></tr></thead><tbody id="production-rows"></tbody></table></div>
+          <h3>Late and excluded orders</h3><ul id="exception-list" class="import-list"></ul>
+          <h3>Draft named roster</h3><div class="scroll"><table><thead><tr><th>Date</th><th>Assigned staff</th><th>Capacity</th><th>Gap</th><th>Cover to request</th></tr></thead><tbody id="roster-rows"></tbody></table></div>
+          <h3>Stock and purchasing</h3><div class="scroll"><table><thead><tr><th>Ingredient</th><th>Demand</th><th>Usable stock</th><th>Shortage</th><th>Packs to request</th></tr></thead><tbody id="stock-rows"></tbody></table></div>
+          <h3>Dated manager actions</h3><ul id="action-list" class="import-list"></ul>
+          <h3>Planning agents</h3><p class="muted">Run only when you choose. Recommendations are saved with the current imports. The numeric plan stays available if the API fails.</p>
+          <button id="run-agents">Run planning agents</button><p id="agent-message" class="message" role="status"></p>
+          <div id="agent-results" hidden><p id="agent-meta" class="muted"></p><div id="agent-cards"></div><h3>Handoff trace</h3><ul id="handoff-list" class="import-list"></ul><h3>Supplier draft for review</h3><p id="supplier-draft" style="white-space:pre-wrap"></p></div>
+        </div>
+      </section>
     </main>
     <script>
       const tokenInput = document.querySelector("#token");
@@ -73,6 +97,8 @@
       const importsPanel = document.querySelector("#imports-panel");
       const historyPanel = document.querySelector("#history-panel");
       const historyList = document.querySelector("#history");
+      const planPanel = document.querySelector("#plan-panel");
+      const planContent = document.querySelector("#plan-content");
       let ownerToken = sessionStorage.getItem("kitchenPlannerOwnerToken") || "";
       tokenInput.value = ownerToken;
 
@@ -99,6 +125,49 @@
           historyList.append(row);
         }
       }
+      function cell(row, value) { const td = document.createElement("td"); td.textContent = String(value); row.append(td); }
+      function rowInto(target, values) { const row = document.createElement("tr"); values.forEach((value) => cell(row, value)); target.append(row); }
+      function listInto(target, values) { target.replaceChildren(); for (const value of values) { const item = document.createElement("li"); item.textContent = value; target.append(item); } }
+      function showRun(run) {
+        const results = document.querySelector("#agent-results");
+        results.hidden = !run || run.status !== "succeeded";
+        if (!run) { setMessage(document.querySelector("#agent-message"), "No agent run for these imports yet.", true); return; }
+        if (run.status === "failed") { setMessage(document.querySelector("#agent-message"), run.error_message || "Agent run failed. Numeric plan remains available."); return; }
+        if (run.status !== "succeeded") { setMessage(document.querySelector("#agent-message"), "Agent run in progress.", true); return; }
+        setMessage(document.querySelector("#agent-message"), "Three recommendations saved.", true);
+        document.querySelector("#agent-meta").textContent = `${run.model} · completed ${new Date(run.completed_at).toLocaleString()} · import version ${run.import_version.slice(0, 12)}`;
+        const cards = document.querySelector("#agent-cards"); cards.replaceChildren();
+        for (const [key, title] of [["sales","Sales & Production Planning Agent"],["manpower","Manpower Planning Agent"],["purchasing","Purchasing Agent"]]) {
+          const section = document.createElement("section"); const heading = document.createElement("h3"); heading.textContent = title; const summary = document.createElement("p"); summary.textContent = run.recommendations[key].summary;
+          const actions = document.createElement("ul"); actions.className = "import-list"; listInto(actions, run.recommendations[key].actions.map((action) => `${action.date}: ${action.finding} — ${action.human_action}`));
+          section.append(heading, summary, actions); cards.append(section);
+        }
+        listInto(document.querySelector("#handoff-list"), run.handoff_trace.map((step) => `${step.from} → ${step.to}: ${step.received.join(", ")}`));
+        const draft = run.recommendations.supplier_draft; document.querySelector("#supplier-draft").textContent = `To: ${draft.recipient}\nSubject: ${draft.subject}\n\n${draft.body}`;
+      }
+      async function loadPlan() {
+        planPanel.hidden = false;
+        try {
+          const data = await api("/api/plan");
+          if (!data.ready) { planContent.hidden = true; setMessage(document.querySelector("#plan-message"), `Still needed: ${data.missing.join(", ")}.`); return; }
+          planContent.hidden = false; setMessage(document.querySelector("#plan-message"), "Calculated from saved records.", true);
+          const p = data.plan;
+          const crm = p.imports.find((item) => item.kind === "crm_orders");
+          document.querySelector("#plan-source").textContent = `CRM export ${crm.external_id} · imported ${new Date(crm.imported_at).toLocaleString()} · planning week ${p.scenario.week_start} to ${p.scenario.week_end}`;
+          const summary = document.querySelector("#plan-summary"); summary.replaceChildren();
+          for (const [label, value] of [["Eligible orders",p.orders.eligible_count],["Late/excluded",p.orders.excluded_count],["Sandwiches",p.production.total_sandwiches],["Labour hours",p.labour.total_demand_hours],["Uncovered hours",p.labour.uncovered_hours]]) { const box = document.createElement("div"); const strong = document.createElement("strong"); strong.textContent = value; const caption = document.createElement("span"); caption.textContent = label; box.append(strong,caption); summary.append(box); }
+          const production = document.querySelector("#production-rows"); production.replaceChildren(); p.production.days.forEach((d) => rowInto(production,[d.date,d.products.CHEESE,d.products.EGG,d.products.CHICKEN,d.total_sandwiches,d.labour_hours]));
+          listInto(document.querySelector("#exception-list"),p.orders.excluded.map((o) => `${o.id} · ${o.production_date} · ${o.customer} · ${o.quantity} ${o.product_id} · ${o.reasons.join(", ")}`));
+          const roster = document.querySelector("#roster-rows"); roster.replaceChildren(); p.roster.forEach((d) => rowInto(roster,[d.date,d.assigned.map((x) => `${x.name} (${x.start}–${x.end})`).join(", "),d.scheduled_capacity_hours,d.uncovered_hours,d.additional_four_hour_part_time_shifts_to_request]));
+          const stock = document.querySelector("#stock-rows"); stock.replaceChildren(); p.ingredients.stock_request.forEach((x) => rowInto(stock,[x.name,`${x.demand} ${x.unit}`,`${x.usable_stock} ${x.unit}`,`${x.shortage} ${x.unit}`,`${x.packs_to_request} × ${x.pack_name}`]));
+          const actions = []; for(const d of p.roster) if(d.uncovered_hours) actions.push(`${d.date}: ${d.uncovered_hours} labour hours uncovered; manager to request ${d.additional_four_hour_part_time_shifts_to_request} part-time shift and review the draft roster.`);
+          for(const x of p.ingredients.stock_request) if(x.packs_to_request) actions.push(`${p.scenario.week_start}: ${x.name} short by ${x.shortage} ${x.unit}; manager to review request for ${x.packs_to_request} ${x.pack_name}.`);
+          for(const x of p.orders.excluded) actions.push(`${x.production_date}: ${x.id} excluded as ${x.reasons.join(", ")}; manager to decide whether to accept it.`);
+          actions.push(`${p.scenario.week_start}: Manager to approve the draft roster before assigning staff.`);
+          listInto(document.querySelector("#action-list"),actions);
+          try { const result = await api("/api/agents"); showRun(result.run); } catch (error) { setMessage(document.querySelector("#agent-message"),error.message); }
+        } catch (error) { planContent.hidden = true; setMessage(document.querySelector("#plan-message"),error.message); }
+      }
       async function unlock() {
         ownerToken = tokenInput.value.trim();
         if (!ownerToken) { setMessage(accessMessage, "Enter the owner import token."); return; }
@@ -108,6 +177,7 @@
           importsPanel.hidden = false;
           historyPanel.hidden = false;
           showHistory(data.imports);
+          await loadPlan();
           setMessage(accessMessage, "Owner access is ready.", true);
         } catch (error) {
           sessionStorage.removeItem("kitchenPlannerOwnerToken");
@@ -129,10 +199,16 @@
             const data = await api("/api/imports", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: card.dataset.kind, filename: file.name, content }) });
             const saved = data.import;
             setMessage(message, `${saved.duplicate ? "Already imported" : "Imported"}: ${saved.row_count} rows.`, true);
-            const listing = await api("/api/imports"); showHistory(listing.imports);
+            const listing = await api("/api/imports"); showHistory(listing.imports); await loadPlan();
           } catch (error) { setMessage(message, error.message); }
           finally { button.disabled = false; }
         });
+      });
+      document.querySelector("#run-agents").addEventListener("click", async (event) => {
+        const button = event.currentTarget; button.disabled = true; setMessage(document.querySelector("#agent-message"),"Running three planning agents…",true);
+        try { const result = await api("/api/agents",{method:"POST"}); showRun(result.run); }
+        catch(error) { setMessage(document.querySelector("#agent-message"),`${error.message} The numeric plan remains available.`); }
+        finally { button.disabled = false; }
       });
     </script>
   </body>

@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { getPool } = require("../lib/database");
 const { validateInventory, validateHr, validateCrm } = require("../lib/import-validation");
+const { authorized } = require("../lib/auth");
 
 const schemaSql = fs.readFileSync(path.join(__dirname, "..", "database", "schema.sql"), "utf8");
 let schemaReady;
@@ -11,15 +12,6 @@ function json(response, status, payload) {
   response.statusCode = status;
   response.setHeader("Content-Type", "application/json; charset=utf-8");
   response.end(JSON.stringify(payload));
-}
-
-function authorized(request) {
-  const expected = process.env.OWNER_IMPORT_TOKEN;
-  const actual = request.headers.authorization?.replace(/^Bearer\s+/i, "");
-  if (!expected || !actual) return false;
-  const left = Buffer.from(expected);
-  const right = Buffer.from(actual);
-  return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
 async function ensureSchema(pool) {

@@ -5,6 +5,8 @@ const path = require("node:path");
 require("dotenv").config();
 const health = require("./api/health");
 const imports = require("./api/imports");
+const plan = require("./api/plan");
+const agents = require("./api/agents");
 const port = Number(process.env.PORT || 3000);
 const pagePath = path.join(__dirname, "public", "index.html");
 
@@ -18,6 +20,16 @@ const server = http.createServer((request, response) => {
 
   if (requestUrl.pathname === "/api/imports") {
     imports(request, response);
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/plan") {
+    plan(request, response);
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/agents") {
+    agents(request, response);
     return;
   }
 
