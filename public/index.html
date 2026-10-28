@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f4f2eb">
+    <title>Kitchen Planner</title>
+    <style>
+      :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #202b24; background: #f4f2eb; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; }
+      main { width: min(100% - 36px, 900px); margin: 0 auto; padding: 48px 0 72px; }
+      .eyebrow { margin: 0 0 10px; color: #56715f; font-size: 13px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+      h1 { margin: 0; font-family: Georgia, "Times New Roman", serif; font-size: clamp(38px, 7vw, 58px); font-weight: 500; letter-spacing: -.04em; }
+      .intro { max-width: 690px; margin: 14px 0 28px; color: #526158; font-size: 17px; line-height: 1.55; }
+      .panel { margin-top: 18px; padding: 22px; border: 1px solid #d4dbd1; border-radius: 16px; background: #fffefa; }
+      h2 { margin: 0 0 7px; font-size: 18px; }
+      p { color: #526158; line-height: 1.5; }
+      .access { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+      input, select, button { font: inherit; }
+      input[type="password"] { flex: 1 1 260px; min-width: 0; padding: 11px 12px; border: 1px solid #cbd3c8; border-radius: 9px; }
+      button { padding: 11px 15px; border: 0; border-radius: 9px; background: #355c43; color: white; font-weight: 650; cursor: pointer; }
+      button:disabled { cursor: wait; opacity: .6; }
+      .import-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(245px, 1fr)); gap: 12px; margin-top: 16px; }
+      .import-card { padding: 16px; border: 1px solid #e0e4dd; border-radius: 12px; }
+      .import-card h3 { margin: 0 0 7px; font-size: 15px; }
+      .import-card p { min-height: 42px; margin: 0 0 13px; font-size: 13px; }
+      input[type="file"] { display: block; width: 100%; margin: 10px 0 12px; font-size: 13px; }
+      .message { min-height: 20px; margin: 9px 0 0; font-size: 13px; }
+      .error { color: #9c302b; }
+      .success { color: #27623a; }
+      .import-list { display: grid; gap: 8px; padding: 0; list-style: none; }
+      .import-list li { padding: 12px; border-radius: 9px; background: #f3f5ef; color: #45554b; font-size: 13px; line-height: 1.5; }
+      .muted { color: #78837a; font-size: 13px; }
+      [hidden] { display: none !important; }
+      @media (max-width: 560px) { main { padding-top: 34px; } .panel { padding: 17px; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">Sample Central Kitchen</p>
+      <h1>Kitchen Planner</h1>
+      <p class="intro">Import the owner’s stock and HR records, then upload the weekly CRM export. Files are validated by the backend and saved to Postgres before they appear in the import history.</p>
+
+      <section class="panel" aria-labelledby="access-title">
+        <h2 id="access-title">Owner access</h2>
+        <p class="muted">Enter the import access token configured on the server. It stays in this browser session.</p>
+        <div class="access"><input id="token" type="password" autocomplete="current-password" placeholder="Owner import token" aria-label="Owner import token"><button id="unlock">Open imports</button></div>
+        <p id="access-message" class="message" role="status"></p>
+      </section>
+
+      <section id="imports-panel" class="panel" aria-labelledby="imports-title" hidden>
+        <h2 id="imports-title">Import records</h2>
+        <p>Import staff master before leave and availability. Upload CRM orders last. The same file can be uploaded again safely without duplicating its rows.</p>
+        <div class="import-grid">
+          <article class="import-card" data-kind="inventory"><h3>Stock count</h3><p>Upload the current inventory JSON. The checked time is shown in history.</p><input type="file" accept=".json,application/json"><button>Import stock</button><p class="message" role="status"></p></article>
+          <article class="import-card" data-kind="staff"><h3>1. Staff master</h3><p>Import the HR staff export before leave and availability records.</p><input type="file" accept=".json,application/json"><button>Import staff</button><p class="message" role="status"></p></article>
+          <article class="import-card" data-kind="leave"><h3>2. Approved leave</h3><p>Staff IDs are checked against the imported staff master.</p><input type="file" accept=".json,application/json"><button>Import leave</button><p class="message" role="status"></p></article>
+          <article class="import-card" data-kind="availability"><h3>3. Part-time availability</h3><p>Staff IDs and shift times are validated against the staff master.</p><input type="file" accept=".json,application/json"><button>Import availability</button><p class="message" role="status"></p></article>
+          <article class="import-card" data-kind="crm_orders"><h3>4. Weekly CRM orders</h3><p>Upload the CSV export. Duplicate order IDs and unknown products are rejected.</p><input type="file" accept=".csv,text/csv"><button>Import CRM orders</button><p class="message" role="status"></p></article>
+        </div>
+      </section>
+
+      <section id="history-panel" class="panel" aria-labelledby="history-title" hidden>
+        <h2 id="history-title">Saved import history</h2>
+        <p class="muted">Details are read from Postgres, so they remain after a reload.</p>
+        <ul id="history" class="import-list"></ul>
+      </section>
+    </main>
+    <script>
+      const tokenInput = document.querySelector("#token");
+      const accessMessage = document.querySelector("#access-message");
+      const importsPanel = document.querySelector("#imports-panel");
+      const historyPanel = document.querySelector("#history-panel");
+      const historyList = document.querySelector("#history");
+      let ownerToken = sessionStorage.getItem("kitchenPlannerOwnerToken") || "";
+      tokenInput.value = ownerToken;
+
+      function setMessage(target, message, ok = false) {
+        target.textContent = message;
+        target.className = `message ${message ? (ok ? "success" : "error") : ""}`;
+      }
+      async function api(path, options = {}) {
+        const response = await fetch(path, { ...options, headers: { ...(options.headers || {}), Authorization: `Bearer ${ownerToken}` } });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `Request failed (${response.status}).`);
+        return data;
+      }
+      function showHistory(imports) {
+        historyList.replaceChildren();
+        if (!imports.length) {
+          const item = document.createElement("li"); item.textContent = "No files imported yet."; historyList.append(item); return;
+        }
+        for (const item of imports) {
+          const row = document.createElement("li");
+          const external = item.external_id ? ` · Export ID ${item.external_id}` : "";
+          const checked = item.details?.checked_at ? ` · Count checked ${new Date(item.details.checked_at).toLocaleString()}` : "";
+          row.textContent = `${item.kind} · ${item.source_file}${external} · ${item.row_count} rows · imported ${new Date(item.imported_at).toLocaleString()}${checked}`;
+          historyList.append(row);
+        }
+      }
+      async function unlock() {
+        ownerToken = tokenInput.value.trim();
+        if (!ownerToken) { setMessage(accessMessage, "Enter the owner import token."); return; }
+        sessionStorage.setItem("kitchenPlannerOwnerToken", ownerToken);
+        try {
+          const data = await api("/api/imports");
+          importsPanel.hidden = false;
+          historyPanel.hidden = false;
+          showHistory(data.imports);
+          setMessage(accessMessage, "Owner access is ready.", true);
+        } catch (error) {
+          sessionStorage.removeItem("kitchenPlannerOwnerToken");
+          setMessage(accessMessage, error.message);
+        }
+      }
+      document.querySelector("#unlock").addEventListener("click", unlock);
+      if (ownerToken) unlock();
+      document.querySelectorAll(".import-card").forEach((card) => {
+        card.querySelector("button").addEventListener("click", async () => {
+          const file = card.querySelector("input").files[0];
+          const message = card.querySelector(".message");
+          const button = card.querySelector("button");
+          if (!file) { setMessage(message, "Choose a file first."); return; }
+          button.disabled = true;
+          setMessage(message, "Validating and saving…", true);
+          try {
+            const content = await file.text();
+            const data = await api("/api/imports", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: card.dataset.kind, filename: file.name, content }) });
+            const saved = data.import;
+            setMessage(message, `${saved.duplicate ? "Already imported" : "Imported"}: ${saved.row_count} rows.`, true);
+            const listing = await api("/api/imports"); showHistory(listing.imports);
+          } catch (error) { setMessage(message, error.message); }
+          finally { button.disabled = false; }
+        });
+      });
+    </script>
+  </body>
+</html>

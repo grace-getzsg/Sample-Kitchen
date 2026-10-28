@@ -7,4 +7,3 @@ node_modules/
 
 # Operational exports contain sample business records and are imported by users later.
 /operating-data/
-
